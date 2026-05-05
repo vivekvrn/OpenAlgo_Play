@@ -21,6 +21,7 @@ import {
   User,
   Workflow,
   Wrench,
+  Brain,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -69,6 +70,7 @@ export const profileMenuItems: NavItem[] = [
   { href: '/pnl-tracker', label: 'PnL Tracker', icon: BarChart3 },
   { href: '/historify', label: 'Historify', icon: Database },
   { href: '/search/token', label: 'Search', icon: Search },
+  { href: '/optdashboard', label: 'Vol & Gamma', icon: Brain },
   { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },
   { href: '/leverage', label: 'Leverage', icon: Gauge },
   { href: '/admin', label: 'Admin', icon: Settings },

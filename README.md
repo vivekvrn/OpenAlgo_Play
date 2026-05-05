@@ -96,7 +96,7 @@ Build trading strategies visually without writing code:
 - **Visual debugging** with execution flow highlighting
 
 ### Options & Strategy Analytics Tools (`/tools`)
-A complete suite of twelve built-in analytical tools for options trading and market analysis — no external subscriptions required. Accessible from the **Tools** page in the sidebar:
+A complete suite of thirteen built-in analytical tools for options trading and market analysis — no external subscriptions required. Accessible from the **Tools** page in the sidebar:
 
 | Tool | Route | What it does |
 |------|-------|--------------|
@@ -112,8 +112,36 @@ A complete suite of twelve built-in analytical tools for options trading and mar
 | **GEX Dashboard** | `/gex` | Gamma Exposure analysis with OI Walls, Net GEX per strike, and top gamma strikes |
 | **IV Smile** | `/ivsmile` | Implied Volatility smile with Call/Put IV curves, ATM IV, and skew analysis |
 | **OI Profile** | `/oiprofile` | Futures candlestick with OI butterfly and daily OI change across strikes |
+| **Vol & Gamma Dashboard** | `/optdashboard` | Options Intelligence Dashboard: market-regime classifier, GEX walls, gamma flip level, IV smile/skew, OI butterfly, max pain, and multi-expiry term structure — plus ranked strategy suggestions with Sandbox pre-fill |
 
 All tools stream live from your connected broker via the unified WebSocket feed and work identically across every supported broker.
+
+### Vol & Gamma Dashboard — Options Intelligence (`/optdashboard`)
+
+A single-page market intelligence view for NIFTY options that synthesises gamma exposure, open interest, implied volatility, and term structure into an actionable trading picture. Accessible via **Profile menu → Vol & Gamma**.
+
+#### What it shows
+
+| Panel | Description |
+|-------|-------------|
+| **Market Pulse** | Regime banner (Gamma Pinned / Squeeze Risk / Fear Mode / Event Risk / Pinning / Neutral) with eight live KPIs: spot, ATM IV, IV skew, PCR, call wall, put wall, gamma flip level, and max pain |
+| **GEX Walls** | Per-strike Net Gamma Exposure bar chart with call-wall (resistance), put-wall (support), and gamma-flip (dealer regime change) annotated as vertical lines |
+| **Vol Panel** | IV smile curve (CE vs PE across strikes) stacked with a term-structure bar chart showing ATM IV for each available expiry (contango / backwardation visual) |
+| **OI Panel** | Horizontal OI butterfly (CE OI left, PE OI right) with max-pain and spot overlaid as reference lines |
+| **Strategy Suggestions** | Top-3 strategies ranked by regime fit score, each with rationale, max profit/loss per lot, breakeven levels, net premium, expandable leg detail, and a "Pre-fill in Sandbox" dialog that generates ready-to-use JSON for the API Sandbox |
+
+#### Supported strategies
+
+Iron Condor · Iron Fly · Long Straddle · Bull Put Spread · Bear Call Spread · Calendar Spread (front vs next weekly expiry)
+
+#### Requirements
+
+- An active broker session with a valid access token (the dashboard calls the broker's option-chain API on demand — no additional configuration needed beyond a normal OpenAlgo login)
+- For calendar spread suggestions, select both a **Front expiry** and a **Next expiry** in the dropdown controls before clicking Refresh
+
+#### No extra installation
+
+The dashboard is built into OpenAlgo's standard install. No additional Python packages or npm dependencies are required. After cloning and running `uv run app.py`, the route `/optdashboard` is available immediately once you log in.
 
 ### API Analyzer Mode
 Complete testing environment with ₹1 Crore virtual capital:

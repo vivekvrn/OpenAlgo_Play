@@ -1,7 +1,7 @@
 """
 Strategy Suggester Service
 
-Rule-based engine that maps market regime signals to option strategies for NIFTY.
+Rule-based engine that maps market regime signals to option strategies.
 Returns ranked strategy suggestions with leg details and approximate P&L metrics.
 
 Strategies covered:
@@ -20,12 +20,8 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-NIFTY_STRIKE_STEP = 50
-WING_WIDTH = 200     # pts — default wing for IC / Iron Fly
-SPREAD_WIDTH = 200   # pts — width of vertical spreads
 
-
-def _round_to_step(strike: float, step: int = NIFTY_STRIKE_STEP) -> int:
+def _round_to_step(strike: float, step: int) -> int:
     return int(round(strike / step) * step)
 
 
@@ -58,15 +54,14 @@ def _leg(ltp_map, underlying, expiry, strike, option_type, action, exchange):
 
 
 def _iron_condor(underlying, exchange, expiry, atm_strike, lot_size, ltp_map,
-                 call_wall, put_wall) -> dict | None:
-    # Sell at OI walls; if walls not available fall back to ATM ± 2 steps
-    sell_ce = _round_to_step(call_wall if call_wall else atm_strike + WING_WIDTH)
-    sell_pe = _round_to_step(put_wall if put_wall else atm_strike - WING_WIDTH)
-    buy_ce = sell_ce + WING_WIDTH
-    buy_pe = sell_pe - WING_WIDTH
+                 call_wall, put_wall, strike_step: int, wing_width: int) -> dict | None:
+    sell_ce = _round_to_step(call_wall if call_wall else atm_strike + wing_width, strike_step)
+    sell_pe = _round_to_step(put_wall if put_wall else atm_strike - wing_width, strike_step)
+    buy_ce = sell_ce + wing_width
+    buy_pe = sell_pe - wing_width
 
     if sell_ce <= atm_strike or sell_pe >= atm_strike:
-        return None  # walls not sensibly placed
+        return None
 
     legs = [
         _leg(ltp_map, underlying, expiry, sell_ce, "CE", "SELL", exchange),
@@ -78,9 +73,7 @@ def _iron_condor(underlying, exchange, expiry, atm_strike, lot_size, ltp_map,
     net_credit = (legs[0]["ltp"] - legs[1]["ltp"]) + (legs[2]["ltp"] - legs[3]["ltp"])
     net_credit = max(net_credit, 0)
     max_profit = round(net_credit * lot_size, 0)
-    max_loss = round((WING_WIDTH - net_credit) * lot_size, 0)
-    upper_be = sell_ce + net_credit
-    lower_be = sell_pe - net_credit
+    max_loss = round((wing_width - net_credit) * lot_size, 0)
 
     return {
         "name": "Iron Condor",
@@ -88,14 +81,15 @@ def _iron_condor(underlying, exchange, expiry, atm_strike, lot_size, ltp_map,
         "net_premium": round(net_credit, 2),
         "max_profit_per_lot": int(max_profit),
         "max_loss_per_lot": int(max_loss),
-        "upper_breakeven": round(upper_be, 0),
-        "lower_breakeven": round(lower_be, 0),
+        "upper_breakeven": round(sell_ce + net_credit, 0),
+        "lower_breakeven": round(sell_pe - net_credit, 0),
     }
 
 
-def _iron_fly(underlying, exchange, expiry, atm_strike, lot_size, ltp_map) -> dict | None:
-    buy_ce = atm_strike + WING_WIDTH
-    buy_pe = atm_strike - WING_WIDTH
+def _iron_fly(underlying, exchange, expiry, atm_strike, lot_size, ltp_map,
+              wing_width: int) -> dict | None:
+    buy_ce = atm_strike + wing_width
+    buy_pe = atm_strike - wing_width
 
     legs = [
         _leg(ltp_map, underlying, expiry, atm_strike, "CE", "SELL", exchange),
@@ -108,7 +102,7 @@ def _iron_fly(underlying, exchange, expiry, atm_strike, lot_size, ltp_map) -> di
     wing_cost = legs[2]["ltp"] + legs[3]["ltp"]
     net_credit = max(straddle_credit - wing_cost, 0)
     max_profit = round(net_credit * lot_size, 0)
-    max_loss = round((WING_WIDTH - net_credit) * lot_size, 0)
+    max_loss = round((wing_width - net_credit) * lot_size, 0)
 
     return {
         "name": "Iron Fly",
@@ -134,16 +128,17 @@ def _long_straddle(underlying, exchange, expiry, atm_strike, lot_size, ltp_map) 
         "name": "Long Straddle",
         "legs": legs,
         "net_premium": round(-total_cost, 2),
-        "max_profit_per_lot": None,   # unlimited
+        "max_profit_per_lot": None,
         "max_loss_per_lot": int(max_loss),
         "upper_breakeven": round(atm_strike + total_cost, 0),
         "lower_breakeven": round(atm_strike - total_cost, 0),
     }
 
 
-def _bull_put_spread(underlying, exchange, expiry, atm_strike, lot_size, ltp_map) -> dict:
-    sell_strike = atm_strike - NIFTY_STRIKE_STEP * 2   # ~100 pts below ATM
-    buy_strike = sell_strike - SPREAD_WIDTH
+def _bull_put_spread(underlying, exchange, expiry, atm_strike, lot_size, ltp_map,
+                     strike_step: int, spread_width: int) -> dict:
+    sell_strike = atm_strike - strike_step * 2   # 2 steps OTM
+    buy_strike = sell_strike - spread_width
 
     legs = [
         _leg(ltp_map, underlying, expiry, sell_strike, "PE", "SELL", exchange),
@@ -152,7 +147,7 @@ def _bull_put_spread(underlying, exchange, expiry, atm_strike, lot_size, ltp_map
 
     net_credit = max(legs[0]["ltp"] - legs[1]["ltp"], 0)
     max_profit = round(net_credit * lot_size, 0)
-    max_loss = round((SPREAD_WIDTH - net_credit) * lot_size, 0)
+    max_loss = round((spread_width - net_credit) * lot_size, 0)
 
     return {
         "name": "Bull Put Spread",
@@ -165,9 +160,10 @@ def _bull_put_spread(underlying, exchange, expiry, atm_strike, lot_size, ltp_map
     }
 
 
-def _bear_call_spread(underlying, exchange, expiry, atm_strike, lot_size, ltp_map) -> dict:
-    sell_strike = atm_strike + NIFTY_STRIKE_STEP * 2   # ~100 pts above ATM
-    buy_strike = sell_strike + SPREAD_WIDTH
+def _bear_call_spread(underlying, exchange, expiry, atm_strike, lot_size, ltp_map,
+                      strike_step: int, spread_width: int) -> dict:
+    sell_strike = atm_strike + strike_step * 2   # 2 steps OTM
+    buy_strike = sell_strike + spread_width
 
     legs = [
         _leg(ltp_map, underlying, expiry, sell_strike, "CE", "SELL", exchange),
@@ -176,7 +172,7 @@ def _bear_call_spread(underlying, exchange, expiry, atm_strike, lot_size, ltp_ma
 
     net_credit = max(legs[0]["ltp"] - legs[1]["ltp"], 0)
     max_profit = round(net_credit * lot_size, 0)
-    max_loss = round((SPREAD_WIDTH - net_credit) * lot_size, 0)
+    max_loss = round((spread_width - net_credit) * lot_size, 0)
 
     return {
         "name": "Bear Call Spread",
@@ -356,6 +352,9 @@ def suggest_strategies(
     term_slope: float | None,
     regime: str,
     ltp_map: dict,
+    strike_step: int = 50,
+    wing_width: int = 200,
+    spread_width: int = 200,
 ) -> list[dict[str, Any]]:
     """
     Generate up to 3 ranked strategy suggestions based on market signals.
@@ -364,7 +363,7 @@ def suggest_strategies(
         put_wall is not None and call_wall is not None
         and put_wall < spot_price < call_wall
     )
-    near_max_pain = max_pain is not None and abs(spot_price - max_pain) <= NIFTY_STRIKE_STEP * 3
+    near_max_pain = max_pain is not None and abs(spot_price - max_pain) <= strike_step * 3
 
     ctx = dict(
         call_wall=call_wall,
@@ -386,7 +385,8 @@ def suggest_strategies(
     # --- Iron Condor ---
     score_ic = _score_iron_condor(regime, between_walls, pcr_oi, atm_iv, near_max_pain)
     if score_ic > 0.1:
-        structure = _iron_condor(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map, call_wall, put_wall)
+        structure = _iron_condor(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map,
+                                 call_wall, put_wall, strike_step, wing_width)
         if structure:
             structure["rationale"] = _build_rationale("Iron Condor", **ctx)
             candidates.append({"score": score_ic, **structure})
@@ -394,7 +394,8 @@ def suggest_strategies(
     # --- Iron Fly ---
     score_if = _score_iron_fly(regime, atm_iv, near_max_pain, pcr_oi)
     if score_if > 0.1:
-        structure = _iron_fly(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map)
+        structure = _iron_fly(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map,
+                              wing_width)
         if structure:
             structure["rationale"] = _build_rationale("Iron Fly", **ctx)
             candidates.append({"score": score_if, **structure})
@@ -409,14 +410,16 @@ def suggest_strategies(
     # --- Bull Put Spread ---
     score_bp = _score_bull_put(regime, pcr_oi, iv_skew, total_net_gex)
     if score_bp > 0.1:
-        structure = _bull_put_spread(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map)
+        structure = _bull_put_spread(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map,
+                                     strike_step, spread_width)
         structure["rationale"] = _build_rationale("Bull Put Spread", **ctx)
         candidates.append({"score": score_bp, **structure})
 
     # --- Bear Call Spread ---
     score_bc = _score_bear_call(regime, pcr_oi, iv_skew, total_net_gex)
     if score_bc > 0.1:
-        structure = _bear_call_spread(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map)
+        structure = _bear_call_spread(underlying, exchange, expiry_date, atm_strike, lot_size, ltp_map,
+                                      strike_step, spread_width)
         structure["rationale"] = _build_rationale("Bear Call Spread", **ctx)
         candidates.append({"score": score_bc, **structure})
 

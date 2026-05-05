@@ -1,7 +1,7 @@
 """
 Options Intelligence Dashboard Service
 
-Aggregates GEX, OI, IV Smile and Term Structure signals for NIFTY
+Aggregates GEX, OI, IV Smile and Term Structure signals for NIFTY and SENSEX
 into a single snapshot with regime classification.
 
 Calls get_option_chain once for front expiry (avoids redundant broker calls),
@@ -14,15 +14,23 @@ from services.option_chain_service import get_option_chain
 from services.option_greeks_service import calculate_greeks
 from services.option_symbol_service import construct_option_symbol, get_available_strikes
 from services.vol_surface_service import get_vol_surface_data
-from services.oi_tracker_service import _get_nearest_futures_price
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-NIFTY_STRIKE_STEP = 50
-WING_WIDTH = 200          # Iron Condor / Fly wing width (pts)
-OTM_SKEW_PCT = 0.05       # 5% OTM for skew measurement
+OTM_SKEW_PCT = 0.05         # 5% OTM for skew measurement
 TERM_SLOPE_THRESHOLD = 2.0  # % IV difference to call backwardation
+
+# Per-underlying parameters: (strike_step, wing_width, spread_width, vol_quote_exchange)
+_UNDERLYING_CONFIGS: dict[str, dict] = {
+    "NIFTY":  {"strike_step": 50,  "wing_width": 200, "spread_width": 200, "vol_exchange": "NSE_INDEX"},
+    "SENSEX": {"strike_step": 100, "wing_width": 400, "spread_width": 400, "vol_exchange": "BSE_INDEX"},
+}
+_DEFAULT_CONFIG = {"strike_step": 50, "wing_width": 200, "spread_width": 200, "vol_exchange": None}
+
+
+def _get_underlying_config(underlying: str) -> dict:
+    return _UNDERLYING_CONFIGS.get(underlying.upper(), _DEFAULT_CONFIG)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +242,7 @@ def _extract_term_structure(surface_data: dict, atm_strike: float) -> list:
 # ---------------------------------------------------------------------------
 # Internal: derive wall / flip signals from GEX chain
 # ---------------------------------------------------------------------------
-def _gex_walls(gex_chain: list, spot_price: float) -> dict:
+def _gex_walls(gex_chain: list, spot_price: float, strike_step: int = 50) -> dict:
     if not gex_chain:
         return {"call_wall": None, "put_wall": None, "gamma_flip": None, "total_net_gex": 0}
 
@@ -248,13 +256,12 @@ def _gex_walls(gex_chain: list, spot_price: float) -> dict:
     for i in range(len(sorted_chain) - 1):
         a, b = sorted_chain[i], sorted_chain[i + 1]
         if (a["net_gex"] >= 0) != (b["net_gex"] >= 0):
-            # Linear interpolation
             if a["net_gex"] != b["net_gex"]:
                 flip = a["strike"] + (b["strike"] - a["strike"]) * (-a["net_gex"]) / (b["net_gex"] - a["net_gex"])
-                gamma_flip = round(flip / NIFTY_STRIKE_STEP) * NIFTY_STRIKE_STEP
+                gamma_flip = round(flip / strike_step) * strike_step
             else:
                 gamma_flip = (a["strike"] + b["strike"]) // 2
-            break  # Take the flip nearest to spot
+            break
 
     return {
         "call_wall": call_wall,
@@ -278,13 +285,14 @@ def _classify_regime(
     iv_skew: float | None,
     max_pain: float | None,
     term_slope: float | None,
+    strike_step: int = 50,
 ) -> dict:
     between_walls = (
         put_wall is not None and call_wall is not None
         and put_wall < spot < call_wall
     )
-    near_flip = gamma_flip is not None and abs(spot - gamma_flip) <= NIFTY_STRIKE_STEP * 2
-    near_max_pain = max_pain is not None and abs(spot - max_pain) <= NIFTY_STRIKE_STEP * 3
+    near_flip = gamma_flip is not None and abs(spot - gamma_flip) <= strike_step * 2
+    near_max_pain = max_pain is not None and abs(spot - max_pain) <= strike_step * 3
 
     if total_net_gex > 0 and between_walls and near_max_pain:
         return {
@@ -352,6 +360,12 @@ def get_dashboard_snapshot(
         (success, snapshot_dict, http_status)
     """
     try:
+        cfg = _get_underlying_config(underlying)
+        strike_step: int = cfg["strike_step"]
+        wing_width: int = cfg["wing_width"]
+        spread_width: int = cfg["spread_width"]
+        vol_quote_exchange: str = cfg["vol_exchange"] or exchange
+
         options_exchange = exchange.upper()
         if options_exchange in ("NSE_INDEX", "NSE"):
             options_exchange = "NFO"
@@ -401,7 +415,7 @@ def get_dashboard_snapshot(
         total_ce_oi = sum(x["ce_oi"] for x in gex_chain)
         total_pe_oi = sum(x["pe_oi"] for x in gex_chain)
         pcr_oi = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 0
-        gex_walls = _gex_walls(gex_chain, spot_price)
+        gex_walls = _gex_walls(gex_chain, spot_price, strike_step)
 
         # ---- Step 3: OI and max pain ----
         oi_chain, max_pain_strike = _compute_oi_and_maxpain(chain)
@@ -426,7 +440,6 @@ def get_dashboard_snapshot(
         next_atm_iv = None
         term_slope = None
 
-        vol_quote_exchange = "NSE_INDEX" if underlying.upper() == "NIFTY" else exchange
         surf_ok, surf_resp, _ = get_vol_surface_data(
             underlying=underlying,
             exchange=vol_quote_exchange,
@@ -455,6 +468,7 @@ def get_dashboard_snapshot(
             iv_skew=iv_skew,
             max_pain=max_pain_strike,
             term_slope=term_slope,
+            strike_step=strike_step,
         )
 
         # ---- Step 7: Strategy suggestions ----
@@ -478,6 +492,9 @@ def get_dashboard_snapshot(
             term_slope=term_slope,
             regime=regime_info["regime"],
             ltp_map=ltp_map,
+            strike_step=strike_step,
+            wing_width=wing_width,
+            spread_width=spread_width,
         )
 
         snapshot = {

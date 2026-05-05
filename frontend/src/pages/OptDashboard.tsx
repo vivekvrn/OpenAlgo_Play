@@ -19,9 +19,13 @@ import { optDashboardApi, type DashboardSnapshot } from '@/api/optdashboard'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
-const UNDERLYING = 'NIFTY'
-const EXCHANGE = 'NFO'
 const AUTO_REFRESH_MS = 60_000
+
+const UNDERLYINGS = [
+  { label: 'NIFTY',  underlying: 'NIFTY',  exchange: 'NFO' },
+  { label: 'SENSEX', underlying: 'SENSEX', exchange: 'BFO' },
+] as const
+type UnderlyingKey = typeof UNDERLYINGS[number]['underlying']
 
 function convertExpiryForAPI(expiry: string): string {
   if (!expiry) return ''
@@ -53,6 +57,7 @@ export default function OptDashboard() {
   const isAnalyzer = appMode === 'analyzer'
   const isDark = mode === 'dark' || isAnalyzer
 
+  const [selectedUnderlying, setSelectedUnderlying] = useState<UnderlyingKey>('NIFTY')
   const [expiries, setExpiries] = useState<string[]>([])
   const [frontExpiry, setFrontExpiry] = useState('')
   const [nextExpiry, setNextExpiry] = useState('__none__')
@@ -64,24 +69,30 @@ export default function OptDashboard() {
   const requestIdRef = useRef(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Load expiries on mount
+  const activeConfig = UNDERLYINGS.find((u) => u.underlying === selectedUnderlying) ?? UNDERLYINGS[0]
+
+  // Reset and reload expiries when underlying changes
   useEffect(() => {
+    setExpiries([])
+    setFrontExpiry('')
+    setNextExpiry('__none__')
+    setSnapshot(null)
     let cancelled = false
     const load = async () => {
       try {
-        const res = await optDashboardApi.getExpiries(EXCHANGE, UNDERLYING)
+        const res = await optDashboardApi.getExpiries(activeConfig.exchange, activeConfig.underlying)
         if (cancelled) return
         const list = res.expiries || []
         setExpiries(list)
         if (list.length >= 1) setFrontExpiry(list[0])
         if (list.length >= 2) setNextExpiry(list[1])
       } catch {
-        if (!cancelled) showToast.error('Failed to load NIFTY expiries')
+        if (!cancelled) showToast.error(`Failed to load ${activeConfig.label} expiries`)
       }
     }
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [selectedUnderlying, activeConfig.exchange, activeConfig.underlying, activeConfig.label])
 
   const fetchSnapshot = useCallback(async () => {
     if (!frontExpiry) return
@@ -89,8 +100,8 @@ export default function OptDashboard() {
     setIsLoading(true)
     try {
       const data = await optDashboardApi.getSnapshot({
-        underlying: UNDERLYING,
-        exchange: EXCHANGE,
+        underlying: activeConfig.underlying,
+        exchange: activeConfig.exchange,
         expiry_date: convertExpiryForAPI(frontExpiry),
         next_expiry_date: nextExpiry && nextExpiry !== '__none__' ? convertExpiryForAPI(nextExpiry) : undefined,
       })
@@ -108,7 +119,7 @@ export default function OptDashboard() {
     } finally {
       if (requestIdRef.current === reqId) setIsLoading(false)
     }
-  }, [frontExpiry, nextExpiry])
+  }, [frontExpiry, nextExpiry, activeConfig])
 
   // Auto-refresh
   useEffect(() => {
@@ -126,7 +137,7 @@ export default function OptDashboard() {
         <div>
           <h1 className="text-xl font-bold tracking-tight">Options Intelligence</h1>
           <p className="text-xs text-muted-foreground">
-            NIFTY · Vol &amp; Gamma Dashboard
+            {activeConfig.label} · Vol &amp; Gamma Dashboard
             {lastUpdated && (
               <span className="ml-2">· Updated {lastUpdated.toLocaleTimeString()}</span>
             )}
@@ -134,6 +145,23 @@ export default function OptDashboard() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 ml-auto">
+          {/* Underlying selector */}
+          <Select
+            value={selectedUnderlying}
+            onValueChange={(v) => setSelectedUnderlying(v as UnderlyingKey)}
+          >
+            <SelectTrigger className="h-8 text-xs w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {UNDERLYINGS.map((u) => (
+                <SelectItem key={u.underlying} value={u.underlying} className="text-xs">
+                  {u.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           {/* Front expiry */}
           <Select value={frontExpiry} onValueChange={setFrontExpiry} disabled={!expiries.length}>
             <SelectTrigger className="h-8 text-xs w-36">
@@ -188,7 +216,7 @@ export default function OptDashboard() {
       ) : !snapshot ? (
         <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-3">
           <p className="text-sm">Select an expiry and click Refresh to load the dashboard.</p>
-          <p className="text-xs">Requires an active Dhan broker session with valid access token.</p>
+          <p className="text-xs">Requires an active broker session with a valid access token.</p>
         </div>
       ) : (
         <div className="space-y-4">

@@ -15,6 +15,7 @@ import { GEXWalls } from '@/components/optdashboard/GEXWalls'
 import { VolPanel } from '@/components/optdashboard/VolPanel'
 import { OIPanel } from '@/components/optdashboard/OIPanel'
 import { StrategySuggestions } from '@/components/optdashboard/StrategySuggestions'
+import { VolatilityRangePanel } from '@/components/optdashboard/VolatilityRangePanel'
 import { optDashboardApi, type DashboardSnapshot } from '@/api/optdashboard'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
@@ -223,13 +224,16 @@ export default function OptDashboard() {
           {/* Row 1: Market Pulse (full width) */}
           <MarketPulse data={snapshot} />
 
-          {/* Row 2: GEX Walls | Vol + Term Structure */}
+          {/* Row 2: Volatility | Probable Range */}
+          <VolatilityRangePanel data={snapshot} />
+
+          {/* Row 3: GEX Walls | Vol + Term Structure */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <GEXWalls data={snapshot} isDark={isDark} />
             <VolPanel data={snapshot} isDark={isDark} />
           </div>
 
-          {/* Row 3: OI Butterfly | Strategy Suggestions */}
+          {/* Row 4: OI Butterfly | Strategy Suggestions */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <OIPanel data={snapshot} isDark={isDark} />
             <StrategySuggestions data={snapshot} />

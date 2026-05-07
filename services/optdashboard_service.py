@@ -8,8 +8,11 @@ Calls get_option_chain once for front expiry (avoids redundant broker calls),
 then separately fetches vol surface for multi-expiry term structure.
 """
 
+import math
+from datetime import date as _date, datetime, timedelta
 from typing import Any
 
+from services.history_service import get_history
 from services.option_chain_service import get_option_chain
 from services.option_greeks_service import calculate_greeks
 from services.option_symbol_service import construct_option_symbol, get_available_strikes
@@ -237,6 +240,103 @@ def _extract_term_structure(surface_data: dict, atm_strike: float) -> list:
             }
         )
     return term
+
+
+# ---------------------------------------------------------------------------
+# Internal: compute 10-day and 30-day annualised historical volatility
+# ---------------------------------------------------------------------------
+def _compute_hv(underlying: str, vol_exchange: str, api_key: str) -> tuple[float | None, float | None]:
+    """Return (hv_10, hv_30) in percent, annualised from daily log-returns.
+
+    Fetches ~60 calendar days of daily closes from the broker API.
+    Returns (None, None) on any failure so the caller degrades gracefully.
+    """
+    try:
+        import numpy as np
+        today = _date.today()
+        start = (today - timedelta(days=65)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+
+        ok, resp, _ = get_history(
+            symbol=underlying,
+            exchange=vol_exchange,
+            interval="D",
+            start_date=start,
+            end_date=end,
+            api_key=api_key,
+        )
+        if not ok:
+            return None, None
+
+        records = resp.get("data", [])
+        closes = [float(r["close"]) for r in records if r.get("close")]
+        if len(closes) < 12:
+            return None, None
+
+        log_returns = np.log(np.array(closes[1:]) / np.array(closes[:-1]))
+
+        hv_10 = round(float(np.std(log_returns[-10:], ddof=1) * math.sqrt(252) * 100), 2) if len(log_returns) >= 10 else None
+        hv_30 = round(float(np.std(log_returns[-30:], ddof=1) * math.sqrt(252) * 100), 2) if len(log_returns) >= 30 else None
+        return hv_10, hv_30
+    except Exception as e:
+        logger.warning(f"HV computation failed for {underlying}: {e}")
+        return None, None
+
+
+# ---------------------------------------------------------------------------
+# Internal: compute probable index ranges
+# ---------------------------------------------------------------------------
+def _compute_ranges(
+    spot: float,
+    atm_strike: float,
+    atm_iv: float | None,
+    expiry_date: str,
+    call_wall: float | None,
+    put_wall: float | None,
+    ltp_map: dict,
+) -> dict:
+    """Return range_gex, range_iv_1sd, range_straddle dicts."""
+    # DTE from DDMMMYY (e.g. "08MAY25")
+    try:
+        expiry_dt = datetime.strptime(expiry_date, "%d%b%y").date()
+        dte = max((expiry_dt - _date.today()).days, 1)
+    except Exception:
+        dte = 1
+
+    # ATM straddle premium from ltp_map
+    atm_entry = ltp_map.get(atm_strike) or ltp_map.get(float(atm_strike)) or ltp_map.get(int(atm_strike))
+    atm_ce_ltp = (atm_entry or {}).get("ce_ltp", 0) or 0
+    atm_pe_ltp = (atm_entry or {}).get("pe_ltp", 0) or 0
+    straddle_premium = round(atm_ce_ltp + atm_pe_ltp, 2)
+
+    # IV 1-sigma range: spot × (IV/100) × √(DTE/365)
+    range_iv_1sd = None
+    if atm_iv and spot > 0:
+        sigma_pts = round(spot * (atm_iv / 100) * math.sqrt(dte / 365), 0)
+        range_iv_1sd = {
+            "lower": round(spot - sigma_pts, 0),
+            "upper": round(spot + sigma_pts, 0),
+            "dte": dte,
+            "sigma_pts": int(sigma_pts),
+        }
+
+    # ATM straddle range
+    range_straddle = None
+    if straddle_premium > 0 and spot > 0:
+        range_straddle = {
+            "lower": round(spot - straddle_premium, 0),
+            "upper": round(spot + straddle_premium, 0),
+            "straddle_premium": straddle_premium,
+        }
+
+    # GEX wall range
+    range_gex = {"lower": put_wall, "upper": call_wall} if call_wall and put_wall else None
+
+    return {
+        "range_gex": range_gex,
+        "range_iv_1sd": range_iv_1sd,
+        "range_straddle": range_straddle,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +571,22 @@ def get_dashboard_snapshot(
             strike_step=strike_step,
         )
 
-        # ---- Step 7: Strategy suggestions ----
+        # ---- Step 7: Historical volatility (best-effort, non-blocking) ----
+        hv_10, hv_30 = _compute_hv(underlying, vol_quote_exchange, api_key)
+        iv_rv_spread = round(atm_iv - hv_30, 2) if atm_iv is not None and hv_30 is not None else None
+
+        # ---- Step 7b: Probable ranges ----
+        ranges = _compute_ranges(
+            spot=spot_price,
+            atm_strike=atm_strike,
+            atm_iv=atm_iv,
+            expiry_date=expiry_date,
+            call_wall=gex_walls["call_wall"],
+            put_wall=gex_walls["put_wall"],
+            ltp_map=ltp_map,
+        )
+
+        # ---- Step 8: Strategy suggestions ----
         from services.strategy_suggester import suggest_strategies
         strategies = suggest_strategies(
             underlying=underlying,
@@ -525,6 +640,14 @@ def get_dashboard_snapshot(
             "regime": regime_info["regime"],
             "regime_description": regime_info["description"],
             "regime_color": regime_info["color"],
+            # Historical volatility
+            "hv_10": hv_10,
+            "hv_30": hv_30,
+            "iv_rv_spread": iv_rv_spread,
+            # Probable ranges
+            "range_gex": ranges["range_gex"],
+            "range_iv_1sd": ranges["range_iv_1sd"],
+            "range_straddle": ranges["range_straddle"],
             # Chart data
             "gex_chain": gex_chain,
             "oi_chain": oi_chain,

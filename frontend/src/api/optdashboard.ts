@@ -80,6 +80,14 @@ export interface DashboardSnapshot {
   regime: string
   regime_description: string
   regime_color: 'green' | 'red' | 'orange' | 'yellow' | 'blue' | 'gray'
+  // Historical volatility
+  hv_10: number | null
+  hv_30: number | null
+  iv_rv_spread: number | null
+  // Probable ranges
+  range_gex: { lower: number; upper: number } | null
+  range_iv_1sd: { lower: number; upper: number; dte: number; sigma_pts: number } | null
+  range_straddle: { lower: number; upper: number; straddle_premium: number } | null
   // Charts
   gex_chain: GEXChainItem[]
   oi_chain: OIChainItem[]

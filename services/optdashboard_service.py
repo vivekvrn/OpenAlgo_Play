@@ -24,12 +24,14 @@ logger = get_logger(__name__)
 OTM_SKEW_PCT = 0.05         # 5% OTM for skew measurement
 TERM_SLOPE_THRESHOLD = 2.0  # % IV difference to call backwardation
 
-# Per-underlying parameters: (strike_step, wing_width, spread_width, vol_quote_exchange)
+# Per-underlying parameters
+# hv_symbol/hv_exchange: ETF proxy for HV because Dhan's historical API returns empty data
+# for IDX_I/INDEX instruments (NSE_INDEX, BSE_INDEX). Log-returns of ETF ≈ log-returns of index.
 _UNDERLYING_CONFIGS: dict[str, dict] = {
-    "NIFTY":  {"strike_step": 50,  "wing_width": 200, "spread_width": 200, "vol_exchange": "NSE_INDEX"},
-    "SENSEX": {"strike_step": 100, "wing_width": 400, "spread_width": 400, "vol_exchange": "BSE_INDEX"},
+    "NIFTY":  {"strike_step": 50,  "wing_width": 200, "spread_width": 200, "vol_exchange": "NSE_INDEX", "hv_symbol": "NIFTYBEES", "hv_exchange": "NSE"},
+    "SENSEX": {"strike_step": 100, "wing_width": 400, "spread_width": 400, "vol_exchange": "BSE_INDEX", "hv_symbol": "SENSEXETF", "hv_exchange": "BSE"},
 }
-_DEFAULT_CONFIG = {"strike_step": 50, "wing_width": 200, "spread_width": 200, "vol_exchange": None}
+_DEFAULT_CONFIG = {"strike_step": 50, "wing_width": 200, "spread_width": 200, "vol_exchange": None, "hv_symbol": None, "hv_exchange": None}
 
 
 def _get_underlying_config(underlying: str) -> dict:
@@ -245,36 +247,51 @@ def _extract_term_structure(surface_data: dict, atm_strike: float) -> list:
 # ---------------------------------------------------------------------------
 # Internal: compute 10-day and 30-day annualised historical volatility
 # ---------------------------------------------------------------------------
-def _compute_hv(underlying: str, vol_exchange: str, api_key: str) -> tuple[float | None, float | None]:
+def _compute_hv(
+    underlying: str,
+    vol_exchange: str,
+    api_key: str,
+    hv_symbol: str | None = None,
+    hv_exchange: str | None = None,
+) -> tuple[float | None, float | None]:
     """Return (hv_10, hv_30) in percent, annualised from daily log-returns.
 
-    Fetches ~60 calendar days of daily closes from the broker API.
+    Fetches ~65 calendar days of daily closes. If the primary symbol returns
+    insufficient data, falls back to hv_symbol/hv_exchange (e.g. NIFTYBEES on NSE)
+    whose log-returns are identical to the index since it's a tracking ETF.
     Returns (None, None) on any failure so the caller degrades gracefully.
     """
-    try:
-        import numpy as np
+    import numpy as np
+
+    def _fetch_closes(symbol: str, exchange: str) -> list[float]:
         today = _date.today()
         start = (today - timedelta(days=65)).strftime("%Y-%m-%d")
         end = today.strftime("%Y-%m-%d")
-
         ok, resp, _ = get_history(
-            symbol=underlying,
-            exchange=vol_exchange,
+            symbol=symbol,
+            exchange=exchange,
             interval="D",
             start_date=start,
             end_date=end,
             api_key=api_key,
         )
         if not ok:
-            return None, None
+            logger.warning(f"HV fetch failed for {symbol}/{exchange}: {resp.get('message', 'unknown')}")
+            return []
+        return [float(r["close"]) for r in resp.get("data", []) if r.get("close")]
 
-        records = resp.get("data", [])
-        closes = [float(r["close"]) for r in records if r.get("close")]
+    try:
+        closes = _fetch_closes(underlying, vol_exchange)
+
+        if len(closes) < 12 and hv_symbol and hv_exchange:
+            logger.info(f"HV: {underlying}/{vol_exchange} returned {len(closes)} closes — trying ETF proxy {hv_symbol}/{hv_exchange}")
+            closes = _fetch_closes(hv_symbol, hv_exchange)
+
         if len(closes) < 12:
+            logger.warning(f"HV: insufficient data ({len(closes)} closes) for {underlying}, skipping")
             return None, None
 
         log_returns = np.log(np.array(closes[1:]) / np.array(closes[:-1]))
-
         hv_10 = round(float(np.std(log_returns[-10:], ddof=1) * math.sqrt(252) * 100), 2) if len(log_returns) >= 10 else None
         hv_30 = round(float(np.std(log_returns[-30:], ddof=1) * math.sqrt(252) * 100), 2) if len(log_returns) >= 30 else None
         return hv_10, hv_30
@@ -572,7 +589,11 @@ def get_dashboard_snapshot(
         )
 
         # ---- Step 7: Historical volatility (best-effort, non-blocking) ----
-        hv_10, hv_30 = _compute_hv(underlying, vol_quote_exchange, api_key)
+        hv_10, hv_30 = _compute_hv(
+            underlying, vol_quote_exchange, api_key,
+            hv_symbol=cfg.get("hv_symbol"),
+            hv_exchange=cfg.get("hv_exchange"),
+        )
         iv_rv_spread = round(atm_iv - hv_30, 2) if atm_iv is not None and hv_30 is not None else None
 
         # ---- Step 7b: Probable ranges ----

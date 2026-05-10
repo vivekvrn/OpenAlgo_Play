@@ -2,7 +2,8 @@
 Options Intelligence Dashboard Blueprint
 
 Endpoints:
-    POST /optdashboard/api/snapshot  — full market snapshot (GEX + OI + Vol + Strategies)
+    POST /optdashboard/api/snapshot      — full market snapshot (GEX + OI + Vol + Strategies)
+    GET  /optdashboard/api/gex-history   — historical GEX time-series for a symbol
 """
 
 import re
@@ -69,3 +70,30 @@ def dashboard_snapshot():
     except Exception as e:
         logger.exception(f"Error in dashboard snapshot API: {e}")
         return jsonify({"status": "error", "message": "An error occurred processing your request"}), 500
+
+
+@optdashboard_bp.route("/optdashboard/api/gex-history", methods=["GET"])
+@cross_origin()
+@check_session_validity
+def gex_history():
+    """Return persisted GEX time-series snapshots for a symbol."""
+    try:
+        symbol = (request.args.get("symbol", "NIFTY") or "NIFTY").strip()[:20].upper()
+        days_str = (request.args.get("days", "60") or "60").strip()
+
+        if not SYMBOL_RE.match(symbol):
+            return jsonify({"status": "error", "message": "Invalid symbol"}), 400
+
+        try:
+            days = max(1, min(int(days_str), 365))
+        except ValueError:
+            days = 60
+
+        from database.gex_history_db import get_gex_history
+        rows = get_gex_history(symbol=symbol, days=days)
+
+        return jsonify({"status": "success", "symbol": symbol, "days": days, "data": rows})
+
+    except Exception as e:
+        logger.exception(f"Error in GEX history API: {e}")
+        return jsonify({"status": "error", "message": "An error occurred"}), 500

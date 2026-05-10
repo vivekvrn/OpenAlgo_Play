@@ -97,6 +97,24 @@ export interface DashboardSnapshot {
   strategies: Strategy[]
 }
 
+export interface GEXSnapshotRow {
+  ts: string
+  expiry: string
+  spot: number
+  net_gex: number
+  call_wall: number | null
+  put_wall: number | null
+  gamma_flip: number | null
+  percentile: number
+}
+
+export interface GEXHistoryResponse {
+  status: 'success' | 'error'
+  symbol: string
+  days: number
+  data: GEXSnapshotRow[]
+}
+
 export const optDashboardApi = {
   getSnapshot: async (params: {
     underlying: string
@@ -114,6 +132,13 @@ export const optDashboardApi = {
   getExpiries: async (exchange: string, underlying: string): Promise<{ expiries: string[] }> => {
     const response = await webClient.get<{ status: string; expiries: string[] }>(
       `/search/api/expiries?exchange=${exchange}&underlying=${underlying}`
+    )
+    return response.data
+  },
+
+  getGEXHistory: async (symbol: string, days = 60): Promise<GEXHistoryResponse> => {
+    const response = await webClient.get<GEXHistoryResponse>(
+      `/optdashboard/api/gex-history?symbol=${symbol}&days=${days}`
     )
     return response.data
   },

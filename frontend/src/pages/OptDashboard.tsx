@@ -12,6 +12,7 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MarketPulse } from '@/components/optdashboard/MarketPulse'
 import { GEXWalls } from '@/components/optdashboard/GEXWalls'
+import { GEXTimeSeries } from '@/components/optdashboard/GEXTimeSeries'
 import { VolPanel } from '@/components/optdashboard/VolPanel'
 import { OIPanel } from '@/components/optdashboard/OIPanel'
 import { StrategySuggestions } from '@/components/optdashboard/StrategySuggestions'
@@ -211,11 +212,14 @@ export default function OptDashboard() {
         </div>
       </div>
 
-      {/* Content */}
+      {/* GEX Time Series — always visible, fetches its own data independently */}
+      <GEXTimeSeries symbol={selectedUnderlying} />
+
+      {/* Snapshot-dependent panels */}
       {isLoading && !snapshot ? (
         <LoadingSkeleton />
       ) : !snapshot ? (
-        <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-3">
+        <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-3">
           <p className="text-sm">Select an expiry and click Refresh to load the dashboard.</p>
           <p className="text-xs">Requires an active broker session with a valid access token.</p>
         </div>

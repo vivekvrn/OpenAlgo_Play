@@ -565,6 +565,14 @@ def setup_environment(app):
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
 
+            try:
+                from services.gex_recorder_service import init_gex_recorder
+
+                init_gex_recorder()
+                logger.debug("GEX recorder scheduler initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize GEX recorder scheduler: {e}")
+
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
                 from database.settings_db import get_analyze_mode

@@ -150,6 +150,10 @@ dependencies = [
   "WTForms==3.2.1",
   "zipp==3.23.1",
   "zmq==0.0.0",
+  "vectorbt>=1.0.0",
+  "yfinance>=1.4.1",
+  "ta-lib>=0.5.0",
+  "reportlab>=5.0.0",
 ]
 
 [build-system]

@@ -51,17 +51,39 @@ def _get_first_user_api_key() -> str | None:
 
 
 def _get_front_expiry(exchange: str, underlying: str) -> str | None:
-    """Get the nearest front expiry from the in-memory master contract cache.
+    """Get the nearest non-expired front expiry from the in-memory master contract cache.
 
     Returns expiry in DDMMMYY format (e.g. '08MAY25'), ready for option chain calls.
+    Filters out expiries that have already passed so that post-expiry snapshots
+    (e.g. NIFTY on the morning after its weekly expiry) roll forward to the next expiry
+    instead of returning zero GEX for expired contracts.
     """
     try:
+        from datetime import date, datetime
+
         from database.token_db_enhanced import get_distinct_expiries_cached
         expiries = get_distinct_expiries_cached(exchange=exchange, underlying=underlying)
         if not expiries:
             return None
+
+        today = date.today()
+
+        def _parse(exp_str: str) -> date:
+            for fmt in ("%d-%b-%y", "%d-%b-%Y"):
+                try:
+                    return datetime.strptime(exp_str, fmt).date()
+                except ValueError:
+                    continue
+            return date.max
+
+        # Keep only expiries that are today or in the future (expired contracts have zero OI)
+        valid = [e for e in expiries if _parse(e) >= today]
+        if not valid:
+            logger.warning(f"GEX recorder: no valid (non-expired) expiry for {underlying}/{exchange}")
+            return None
+
         # Cache returns DD-MMM-YY; strip hyphens for option chain API
-        return expiries[0].replace("-", "").upper()
+        return valid[0].replace("-", "").upper()
     except Exception as e:
         logger.warning(f"GEX recorder: could not get expiry for {underlying}/{exchange} — {e}")
         return None

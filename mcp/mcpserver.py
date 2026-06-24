@@ -1284,5 +1284,89 @@ def analyzer_toggle(mode: bool) -> str:
         return json.dumps({"status": "error", "error": str(e)}, indent=2)
 
 
+@mcp.tool()
+def get_options_dashboard(
+    expiry_date: str,
+    underlying: str = "NIFTY",
+    exchange: str = "NSE_INDEX",
+    next_expiry_date: Optional[str] = None,
+) -> str:
+    """
+    Get the pre-computed options intelligence dashboard snapshot.
+
+    Returns the full analysis already calculated by the OpenAlgo dashboard including:
+    GEX (Gamma Exposure) by strike and total, OI (Open Interest) analysis and max pain,
+    IV smile and term structure, Historical Volatility, probable price ranges (1σ/2σ),
+    support/resistance walls, strategy suggestions (spreads, iron condors etc.),
+    and market regime classification.
+
+    Use this tool instead of manually calling get_option_chain + separate calculations.
+    It returns the same rich data shown on the Options Intelligence Dashboard page.
+
+    Args:
+        expiry_date: Front expiry in DDMMMYY format, e.g. '29MAY25'
+        underlying: Index or stock symbol, e.g. 'NIFTY', 'BANKNIFTY', 'SENSEX'
+        exchange: Exchange code, e.g. 'NSE_INDEX', 'BSE_INDEX'
+        next_expiry_date: Next weekly expiry in DDMMMYY format (optional, for calendar spreads)
+
+    Returns:
+        JSON with full dashboard snapshot including spot price, GEX chain, OI data,
+        IV smile, HV, ranges, walls, regime, and strategy suggestions.
+
+    Example:
+        get_options_dashboard(expiry_date='29MAY25', underlying='NIFTY')
+        get_options_dashboard(expiry_date='29MAY25', underlying='BANKNIFTY', exchange='NSE_INDEX')
+        get_options_dashboard(expiry_date='27MAY25', underlying='SENSEX', exchange='BSE_INDEX')
+    """
+    try:
+        payload = {
+            "apikey": api_key,
+            "underlying": underlying,
+            "exchange": exchange,
+            "expiry_date": expiry_date,
+        }
+        if next_expiry_date:
+            payload["next_expiry_date"] = next_expiry_date
+
+        url = f"{host.rstrip('/')}/api/v1/optdashboard/snapshot"
+        with httpx.Client(timeout=60.0) as http:
+            resp = http.post(url, json=payload)
+        return json.dumps(resp.json(), indent=2, default=str)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+
+
+@mcp.tool()
+def get_gex_history(
+    symbol: str = "NIFTY",
+    days: int = 60,
+) -> str:
+    """
+    Get historical GEX (Gamma Exposure) time-series snapshots from the dashboard.
+
+    Returns the persisted intraday GEX snapshots recorded by the Options Intelligence
+    Dashboard scheduler. Useful for spotting GEX trends, flip levels, and regime shifts
+    over recent sessions.
+
+    Args:
+        symbol: Underlying symbol, e.g. 'NIFTY', 'BANKNIFTY', 'SENSEX'
+        days: Number of calendar days of history to return (1–365, default 60)
+
+    Returns:
+        JSON with array of timestamped GEX snapshots.
+
+    Example:
+        get_gex_history(symbol='NIFTY', days=30)
+    """
+    try:
+        payload = {"apikey": api_key, "symbol": symbol, "days": days}
+        url = f"{host.rstrip('/')}/api/v1/optdashboard/gexhistory"
+        with httpx.Client(timeout=30.0) as http:
+            resp = http.post(url, json=payload)
+        return json.dumps(resp.json(), indent=2, default=str)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

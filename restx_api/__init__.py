@@ -27,6 +27,7 @@ from .intervals import api as intervals_ns
 from .margin import api as margin_ns
 from .market_holidays import api as market_holidays_ns
 from .market_timings import api as market_timings_ns
+from .optdashboard import api as optdashboard_ns
 from .modify_order import api as modify_order_ns
 from .multi_option_greeks import api as multi_option_greeks_ns
 from .multiquotes import api as multiquotes_ns
@@ -93,3 +94,4 @@ api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
 api.add_namespace(market_timings_ns, path="/market/timings")
 api.add_namespace(pnl_symbols_ns, path="/pnl")
+api.add_namespace(optdashboard_ns, path="/optdashboard")
